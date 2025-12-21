@@ -184,8 +184,12 @@ typedef struct sQmiWwanQmap
 
 #if defined(QUECTEL_UL_DATA_AGG)
 	struct tx_agg_ctx tx_ctx;
-	struct tasklet_struct	txq;
+	struct tasklet_struct txq;
+#if LINUX_VERSION_CODE > KERNEL_VERSION(6,17,0)
+	struct work_struct usbnet_bh_work;
+#else
 	struct tasklet_struct usbnet_bh;
+#endif
 #endif
 
 #ifdef QUECTEL_BRIDGE_MODE
@@ -879,6 +883,17 @@ static struct rtnl_link_stats64 *rmnet_vnd_get_stats64(struct net_device *net, s
 #endif
 
 #if defined(QUECTEL_UL_DATA_AGG)
+#if LINUX_VERSION_CODE > KERNEL_VERSION(6,17,0)
+static void usbnet_bh_work(struct work_struct *work) {
+	sQmiWwanQmap *pQmapDev = container_of(work, sQmiWwanQmap, usbnet_bh_work);
+
+	queue_work(system_bh_wq, &pQmapDev->mpNetDev->bh_work);
+
+	if (!netif_queue_stopped(pQmapDev->mpNetDev->net)) {
+		qmap_wake_queue((sQmiWwanQmap *)pQmapDev);
+	}
+}
+#else
 static void usbnet_bh(unsigned long data) {
 	sQmiWwanQmap *pQmapDev = (sQmiWwanQmap *)data;
 	struct tasklet_struct *t = &pQmapDev->usbnet_bh;
@@ -897,6 +912,7 @@ static void usbnet_bh(unsigned long data) {
 		qmap_wake_queue((sQmiWwanQmap *)data);
 	}
 }
+#endif
 
 static void rmnet_usb_tx_wake_queue(unsigned long data) {
 	qmap_wake_queue((sQmiWwanQmap *)data);
@@ -2267,8 +2283,13 @@ static int qmi_wwan_bind(struct usbnet *dev, struct usb_interface *intf)
 				}
 
 				if (pQmapDev->use_rmnet_usb && !one_card_mode) {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(6,17,0)
+					pQmapDev->usbnet_bh_work = dev->bh_work;
+					INIT_WORK(&dev->bh_work, usbnet_bh_work);
+#else
 					pQmapDev->usbnet_bh = dev->bh;
 					tasklet_init(&dev->bh, usbnet_bh, (unsigned long)pQmapDev);
+#endif
 				}
 			}
 		}
